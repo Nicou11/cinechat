@@ -1,9 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from app.kafka_utils import create_topic, delete_topic, get_producer, get_consumer
 from app.chat_utils import encode_topic_name
 from app.db_utils import save_message_to_db, get_messages_from_db
-from app.schemas import Message
+from app.schemas import Message, ChatLog
+from app.db_utils import engine
 from concurrent.futures import ThreadPoolExecutor
+from .websocket_manager import manager
+import time
 
 chat_router = APIRouter(prefix="/chat", tags=["Chat"])
 executor = ThreadPoolExecutor()
@@ -73,3 +76,41 @@ def delete_chat_room(room_name: str):
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return {"status": "success", "room_name": room_name, "encoded_name": encoded_name}
+
+
+@chat_router.websocket("/ws/{room_name}")
+async def websocket_endpoint(websocket: WebSocket, room_name: str):
+    encoded_room = encode_topic_name(room_name)
+    await manager.connect(websocket, encoded_room)
+    producer = get_producer()
+
+    try:
+        while True:
+            # 클라이언트로부터 메시지 수신
+            data = await websocket.receive_json()
+
+            # 메시지 형식 구성
+            message = {
+                "chat_room": encoded_room,
+                "message": data["message"],
+                "timestamp": int(time.time() * 1000),
+            }
+
+            # Kafka로 메시지 전송
+            producer.send(encoded_room, value=message)
+
+            # 같은 방의 모든 클라이언트에게 메시지 브로드캐스트
+            await manager.broadcast(message, encoded_room)
+
+            # MongoDB에 메시지 저장
+            chat_log = ChatLog(
+                chat_room=encoded_room,
+                message=data["message"],
+                timestamp=message["timestamp"],
+            )
+            await engine.save(chat_log)
+
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket, encoded_room)
+    finally:
+        producer.close()

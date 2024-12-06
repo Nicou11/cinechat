@@ -1,6 +1,11 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from app.kafka_utils import create_topic, delete_topic, get_producer, get_consumer
-from app.chat_utils import encode_topic_name
+from app.kafka_utils import (
+    create_topic_name,
+    create_topic,
+    delete_topic,
+    get_producer,
+    get_consumer,
+)
 from app.db_utils import save_message_to_db, get_messages_from_db
 from app.schemas import Message, ChatLog
 from app.db_utils import engine
@@ -13,20 +18,18 @@ executor = ThreadPoolExecutor()
 
 
 @chat_router.post("/create_room/")
-def create_chat_room(room_name: str):
+def create_chat_room(id: str, id2: str):
     """
     Kafka Topic 생성
     - room_name: 한글로 전달된 채팅방 이름
     """
-    # 한글 Topic 이름을 Base64로 변환
-    encoded_name = encode_topic_name(room_name)
-    result = create_topic(encoded_name)  # 인코딩된 이름으로 Topic 생성
+    room_name = create_topic_name(id, id2)
+    result = create_topic(room_name)
     if result["status"] == "error":
         raise HTTPException(status_code=400, detail=result["message"])
     return {
         "status": "success",
-        "original_name": room_name,
-        "encoded_name": encoded_name,
+        "room_name": room_name,
     }
 
 
@@ -39,9 +42,9 @@ async def send_message(room_name: str, message: Message):
     return {"status": "success", "message": "Message sent."}
 
 
-def consume_messages(topic_name: str, limit: int):
+def consume_messages(room_name: str, limit: int):
     """Kafka 메시지를 가져오는 함수 (블로킹 방식)"""
-    consumer = get_consumer(topic_name)  # Kafka Consumer 생성
+    consumer = get_consumer(room_name)  # Kafka Consumer 생성
     messages = []
     for message in consumer:
         messages.append(message.value)
@@ -52,11 +55,10 @@ def consume_messages(topic_name: str, limit: int):
 
 
 @chat_router.get("/receive_messages/")
-async def receive_messages(room_name: str, limit: int = 10):
+async def receive_messages(room_name: str, limit: int = 20):
     """
     채팅방의 메시지를 가져오는 엔드포인트
     """
-    encoded_name = encode_topic_name(room_name)
     try:
         # MongoDB에서 메시지 가져오기 (이미 딕셔너리 형태로 변환됨)
         messages = await get_messages_from_db(room_name, limit)
@@ -71,17 +73,16 @@ def delete_chat_room(room_name: str):
     Kafka Topic 삭제
     - room_name: 한글로 전달된 채팅방 이름
     """
-    encoded_name = encode_topic_name(room_name)  # Topic 이름 인코딩
-    result = delete_topic(encoded_name)
-    if result["status"] == "error":
+    result = delete_topic(room_name)
+    if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result["message"])
-    return {"status": "success", "room_name": room_name, "encoded_name": encoded_name}
+    return {"status": "success", "room_name": room_name}
 
 
 @chat_router.websocket("/ws/{room_name}")
 async def websocket_endpoint(websocket: WebSocket, room_name: str):
-    encoded_room = encode_topic_name(room_name)
-    await manager.connect(websocket, encoded_room)
+    chat_room = create_topic_name(room_name)
+    await manager.connect(websocket, chat_room)
     producer = get_producer()
 
     try:
@@ -91,26 +92,26 @@ async def websocket_endpoint(websocket: WebSocket, room_name: str):
 
             # 메시지 형식 구성
             message = {
-                "chat_room": encoded_room,
+                "chat_room": chat_room,
                 "message": data["message"],
                 "timestamp": int(time.time() * 1000),
             }
 
             # Kafka로 메시지 전송
-            producer.send(encoded_room, value=message)
+            producer.send(chat_room, value=message)
 
             # 같은 방의 모든 클라이언트에게 메시지 브로드캐스트
-            await manager.broadcast(message, encoded_room)
+            await manager.broadcast(message, chat_room)
 
             # MongoDB에 메시지 저장
             chat_log = ChatLog(
-                chat_room=encoded_room,
+                chat_room=chat_room,
                 message=data["message"],
                 timestamp=message["timestamp"],
             )
             await engine.save(chat_log)
 
     except WebSocketDisconnect:
-        await manager.disconnect(websocket, encoded_room)
+        await manager.disconnect(websocket, chat_room)
     finally:
         producer.close()

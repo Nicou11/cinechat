@@ -1,0 +1,10 @@
+services:
+  fastapi-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fastapi
+    ports:
+      - "8001:8001"
+    environment:
+      DOPPLER_TOKEN: ${DOPPLER_TOKEN}

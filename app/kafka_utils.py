@@ -17,6 +17,8 @@ def create_topic(room_name: str):
     """Kafka Topic 생성"""
     admin_client = KafkaAdminClient(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS)
     topic = NewTopic(name=room_name, num_partitions=1, replication_factor=1)
+    print(f"Attempting to create topic: {room_name}")
+    print(f"Using bootstrap servers: {KAFKA_BOOTSTRAP_SERVERS}")
     try:
         admin_client.create_topics([topic])
         print(f"Topic '{room_name}' created.")

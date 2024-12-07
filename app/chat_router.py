@@ -10,7 +10,7 @@ from app.db_utils import save_message_to_db, get_messages_from_db
 from app.schemas import Message, ChatLog
 from app.db_utils import engine
 from concurrent.futures import ThreadPoolExecutor
-from .websocket_manager import manager
+from app.websocket_manager import manager
 import time
 
 chat_router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -79,9 +79,9 @@ def delete_chat_room(room_name: str):
     return {"status": "success", "room_name": room_name}
 
 
-@chat_router.websocket("/ws/{room_name}")
-async def websocket_endpoint(websocket: WebSocket, room_name: str):
-    chat_room = create_topic_name(room_name)
+@chat_router.websocket("/ws/{id}/{id2}")
+async def websocket_endpoint(websocket: WebSocket, id: str, id2: str):
+    chat_room = create_topic_name(id, id2)
     await manager.connect(websocket, chat_room)
     producer = get_producer()
 
